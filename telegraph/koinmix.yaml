@@ -1,0 +1,181 @@
+# KoinMix — Telegraph Miner for the CRYPTO_PRICE intent.
+#
+# Conforms to the Telegraph YAML Standard, version "1":
+#   https://telegraph-2.gitbook.io/telegraph/miner-registry/yaml-standard.md
+#
+# Registration (see miner-registry-facet.md):
+#   YAML_HASH must be the SHA-256 of THIS file's raw bytes, prefixed with 0x
+#   (NOT keccak256). Run `npm run yaml:hash` to compute it. Any edit below
+#   changes the hash and requires deregister + re-register.
+
+version: "1"
+kind: subnet
+id: 9001
+slug: koinmix-crypto-price
+protocol: generic
+name: KoinMix Crypto Price Oracle
+description: >
+  Multi-provider crypto spot price miner. Aggregates live quotes from
+  independent market data providers and emits a median-consensus price with an
+  agreement-derived confidence score.
+
+# `base_url` must point at the public deployment of this service. Override per
+# environment before registering on-chain.
+base_url: https://miner.koinmix.io
+
+# This miner is the origin of the data, not a proxy for a keyed upstream, so no
+# credentials are injected by the node. Provider API keys are held privately by
+# the miner process (see .env.example) and never appear here.
+auth:
+  type: none
+
+# ── Operational settings ─────────────────────────────────────────────────────
+rate_limit_per_sec: 20
+cache_ttl_sec: 0 # Prices must not be served from a node-side cache.
+circuit_threshold: 5
+circuit_cooldown_seconds: 30
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+endpoints:
+  - path: /price
+    external_path: /v1/price
+    method: GET
+    description: >
+      Spot price of `asset` denominated in `quote`, by median consensus across
+      live providers.
+
+# ── Schema hints ─────────────────────────────────────────────────────────────
+input_schema:
+  type: object
+  required: [asset]
+  properties:
+    asset:
+      type: string
+      description: Base asset ticker symbol, e.g. BTC.
+    quote:
+      type: string
+      default: USD
+      description: Quote currency code, e.g. USD.
+
+output_schema:
+  type: object
+  required: [asset, quote, price, priceX1e8, confidence, asOf]
+  properties:
+    intent: { type: string }
+    asset: { type: string }
+    quote: { type: string }
+    price:
+      type: string
+      description: Decimal price as a canonical string, trailing zeros trimmed.
+    priceX1e8:
+      type: integer
+      description: Price scaled by 1e8 for on-chain integer storage.
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: >
+        Reliability indicator, not a probability. Combines source count,
+        agreement, freshness, outliers and provider failures.
+    sourceCount: { type: integer }
+    spreadBps:
+      type: integer
+      description: Peak-to-peak disagreement across sources, in basis points.
+    sources: { type: array, items: { type: string } }
+    method: { type: string, enum: [single, median] }
+    deviationBps: { type: integer }
+    asOf: { type: string, format: date-time }
+    observedAt: { type: string, format: date-time }
+    isStale: { type: boolean }
+    minerSlug: { type: string }
+    explanation: { type: string }
+
+# ── Semantics ────────────────────────────────────────────────────────────────
+semantics:
+  signal_mapping:
+    # NOTE: the canonical signal-type enum in the YAML Standard has no
+    # financial/market-data member (media_authenticity, weather_risk,
+    # text_authenticity, search_relevance, language_response,
+    # multimodal_response, task_completion). `task_completion` is the only
+    # value that is not semantically wrong for a deterministic data lookup, and
+    # a value outside the enum fails node-side schema validation. Flagged in
+    # README.md as an item to confirm with the Telegraph team.
+    type: task_completion
+    confidence_field: confidence
+    label_field: price
+    reason_field: explanation
+  supported_intents:
+    # `crypto_price` is listed in the hackathon intent catalog (Financial Data,
+    # Tier A, WASM Exact Match) but not in the 27-entry canonical list in the
+    # core docs, which predates that catalog. See README.md.
+    - crypto_price
+
+# ── On-chain bridge ──────────────────────────────────────────────────────────
+on_chain:
+  description: Crypto spot price snapshot for on-chain consumption.
+
+  # `direct` (deterministic dot-path extraction), never `llm`: CRYPTO_PRICE is
+  # a Tier A intent scored by WASM Exact Match, so the transform must be
+  # reproducible rather than model-mediated.
+  transform: direct
+
+  # Protocol floor is $0.01. The on-chain value committed at registerMiner()
+  # is the source of truth; this field is informational.
+  min_price_usdc: 0.01
+
+  # How the node builds the upstream HTTP call from on-chain arrays.
+  request:
+    - endpoint: price
+      method: GET
+      query_params:
+        asset: { source: strings.0 }
+        quote: { source: strings.1, optional: true }
+
+  # Typed on-chain arrays are capped at 5 entries each.
+  fields:
+    strings:
+      - index: 0
+        name: asset
+        description: Base asset ticker symbol.
+        source_path: asset
+      - index: 1
+        name: quote_currency
+        description: Quote currency code.
+        source_path: quote
+      - index: 2
+        name: price_decimal
+        description: Consensus price as a decimal string.
+        source_path: price
+      - index: 3
+        name: as_of
+        description: ISO8601 observation time of the consensus price.
+        source_path: asOf
+    integers:
+      - index: 0
+        name: price_usd_x1e8
+        description: Consensus price scaled by 1e8.
+        source_path: priceX1e8
+      - index: 1
+        name: confidence_x10000
+        description: Agreement confidence (0-1) scaled by 10000.
+        source_path: confidence
+        multiplier: 10000
+      - index: 2
+        name: source_count
+        description: Number of providers contributing to the consensus.
+        source_path: sourceCount
+      - index: 3
+        name: deviation_bps
+        description: Widest contributor deviation from consensus, in bps.
+        source_path: deviationBps
+      - index: 4
+        name: spread_bps
+        description: Peak-to-peak disagreement across contributing sources, in bps.
+        source_path: spreadBps
+    bools:
+      - index: 0
+        name: is_stale
+        description: Whether the consensus price breached the staleness bound.
+        source_path: isStale
+        transform_rule: bool_from_eq:true
+    addresses: []
