@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/**
+ * KoinMix terminal theme.
+ *
+ * A market-data surface, so the palette is deliberately narrow: one neutral
+ * ramp carries the whole layout, and colour is reserved for meaning — green and
+ * red for price direction, amber for degraded, red for failed. Nothing is
+ * coloured for decoration, so when something turns red it reads as information.
+ */
+@theme {
+  --color-surface-0: oklch(0.17 0.012 260);
+  --color-surface-1: oklch(0.21 0.014 260);
+  --color-surface-2: oklch(0.25 0.016 260);
+  --color-line: oklch(0.32 0.018 260);
+  --color-line-strong: oklch(0.42 0.02 260);
+
+  --color-ink: oklch(0.96 0.005 260);
+  --color-ink-muted: oklch(0.74 0.014 260);
+  --color-ink-faint: oklch(0.58 0.016 260);
+
+  --color-up: oklch(0.76 0.16 155);
+  --color-down: oklch(0.68 0.19 22);
+  --color-warn: oklch(0.79 0.14 78);
+  --color-accent: oklch(0.72 0.13 235);
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono",
+    Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-surface-0);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 1; /* tabular numerals: prices stop jittering */
+}
+
+/* Numeric cells share one width per digit so refreshes do not shift the layout. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+@keyframes koinmix-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot {
+  animation: koinmix-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}

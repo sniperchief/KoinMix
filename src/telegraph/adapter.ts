@@ -6,6 +6,12 @@ import {
   ValidationError,
 } from "../errors.js";
 import type { AppLogger } from "../logging/logger.js";
+import {
+  isSupportedQuote,
+  resolveAsset,
+  supportedAssets,
+  supportedQuotes,
+} from "../providers/assets.js";
 import { collectQuotes } from "../providers/collect.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { PriceQuery } from "../providers/types.js";
@@ -195,6 +201,30 @@ async function runCryptoPriceRound(
   const request = parseCryptoPriceRequest(raw);
   const query: PriceQuery = { asset: request.asset, quote: request.quote };
 
+  /**
+   * Capability check, before any upstream is touched.
+   *
+   * The request schema is deliberately permissive about symbol *shape* so it can
+   * carry tickers this miner may support later. Whether this miner actually
+   * prices a given pair is a separate question, and it is answered here.
+   *
+   * The distinction matters to a Telegraph node, not just to a human: an
+   * unsupported asset used to fall through to the provider fan-out, where every
+   * adapter declined it and the round ended as 503 PROVIDER_UNAVAILABLE. That
+   * status says "try again later", so a node would retry — forever — a pair that
+   * will never resolve. It is a client-side contract error, so it answers 400.
+   */
+  if (!resolveAsset(query.asset)) {
+    throw new ValidationError(`unsupported asset "${query.asset}"`, {
+      supportedAssets: supportedAssets(),
+    });
+  }
+  if (!isSupportedQuote(query.quote)) {
+    throw new ValidationError(`unsupported quote currency "${query.quote}"`, {
+      supportedQuotes: supportedQuotes(),
+    });
+  }
+
   const providers = registry.active();
   if (providers.length === 0) {
     throw new NoProvidersConfiguredError(
@@ -212,6 +242,21 @@ async function runCryptoPriceRound(
   );
 
   if (quotes.length === 0) {
+    /**
+     * Nothing came back — but *why* changes what the caller should do, so the
+     * two cases do not share a status.
+     *
+     * Every provider declining the pair up front (no failures, only skips) is a
+     * standing capability limit: retrying cannot change it. A provider erroring
+     * or timing out is a transient outage, where retrying is exactly right.
+     */
+    if (failures.length === 0 && skipped.length > 0) {
+      throw new ValidationError(
+        `no configured provider serves ${query.asset}/${query.quote}`,
+        { skipped, supportedQuotes: supportedQuotes() },
+      );
+    }
+
     throw new ProviderUnavailableError(
       `no provider returned a usable ${query.asset}/${query.quote} price`,
       { failures, skipped },

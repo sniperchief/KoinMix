@@ -118,6 +118,11 @@ export function supportedAssets(): readonly string[] {
   return Object.keys(ASSETS);
 }
 
+/** Every quote currency this miner will attempt. */
+export function supportedQuotes(): readonly string[] {
+  return SUPPORTED_QUOTES;
+}
+
 // ── Per-provider market construction ────────────────────────────────────────
 
 /** CoinGecko: `/simple/price?ids=bitcoin&vs_currencies=usd`. */

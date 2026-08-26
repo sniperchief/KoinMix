@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   NoProvidersConfiguredError,
   ProviderUnavailableError,
+  ValidationError,
 } from "../src/errors.js";
 import {
   formatCryptoPriceResponse,
@@ -158,17 +159,21 @@ describe("Telegraph adapter — aggregation over provider quotes", () => {
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 
-  it("skips providers that decline the pair", async () => {
+  it("does not quote a pair every provider declines", async () => {
     const registry = fixedRegistry([
       stubProvider("alpha", quote("alpha", 100, FRESH), false),
     ]);
 
+    // Declining is not failing: no provider covers this pair, which is a
+    // standing limit rather than an outage, so it reports 400 and not a 503
+    // that would invite an endless retry. See the dedicated describe block
+    // below for the full status matrix.
     await expect(
       handleCryptoPriceRequest(
         { asset: "BTC" },
         { config, registry, logger: silentLogger, now: () => NOW },
       ),
-    ).rejects.toBeInstanceOf(ProviderUnavailableError);
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 });
 
@@ -266,6 +271,92 @@ describe("response formatting", () => {
       expect(result, `missing on-chain source_path "${path}"`).toHaveProperty(
         path,
       );
+    }
+  });
+});
+
+/**
+ * An asset or quote this miner does not carry is a *contract* error, not an
+ * outage. These previously fell through to the provider fan-out, where every
+ * adapter declined the pair and the round surfaced 503 PROVIDER_UNAVAILABLE —
+ * a status that tells a Telegraph node to retry something that can never
+ * succeed. Each case below pins the status that distinction depends on.
+ */
+describe("Telegraph adapter — unsupported pairs are client errors", () => {
+  const deps = () => ({
+    config: testConfig(),
+    registry: fixedRegistry([
+      stubProvider("alpha", quote("alpha", 60_000, FRESH)),
+    ]),
+    logger: silentLogger,
+    now: () => NOW,
+  });
+
+  it("rejects an asset this miner does not price, before touching a provider", async () => {
+    try {
+      await handleCryptoPriceRequest({ asset: "DOGECOIN" }, deps());
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const err = error as ValidationError;
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.httpStatus).toBe(400);
+      expect(err.code).toBe("VALIDATION_FAILED");
+      // The caller is told what it *could* have asked for.
+      expect(err.details.supportedAssets).toContain("BTC");
+    }
+  });
+
+  it("rejects a quote currency this miner does not serve", async () => {
+    try {
+      await handleCryptoPriceRequest({ asset: "BTC", quote: "XYZ" }, deps());
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const err = error as ValidationError;
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.httpStatus).toBe(400);
+      expect(err.details.supportedQuotes).toContain("USD");
+    }
+  });
+
+  it("still reports a genuine provider outage as 503, not as a bad request", async () => {
+    // Supported pair, provider present and failing: retrying is the right
+    // advice here, so this must NOT be swept into the 400 above.
+    await expect(
+      handleCryptoPriceRequest(
+        { asset: "BTC" },
+        {
+          config: testConfig(),
+          registry: fixedRegistry([
+            stubProvider("alpha", new Error("upstream 500")),
+          ]),
+          logger: silentLogger,
+          now: () => NOW,
+        },
+      ),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  it("separates 'every provider declined the pair' from 'every provider failed'", async () => {
+    // Supported pair, but no configured provider covers it: a standing
+    // capability limit, so 400 rather than a retryable 503.
+    try {
+      await handleCryptoPriceRequest(
+        { asset: "BTC", quote: "GBP" },
+        {
+          config: testConfig(),
+          registry: fixedRegistry([
+            stubProvider("alpha", quote("alpha", 60_000, FRESH), false),
+          ]),
+          logger: silentLogger,
+          now: () => NOW,
+        },
+      );
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const err = error as ValidationError;
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.httpStatus).toBe(400);
+      expect(err.details.skipped).toEqual(["alpha"]);
     }
   });
 });

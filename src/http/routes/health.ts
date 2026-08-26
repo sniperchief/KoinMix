@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { Config } from "../../config/env.js";
+import { CANDLE_INTERVALS } from "../../market/candles.js";
+import { supportedAssets } from "../../providers/assets.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
 import {
   CRYPTO_PRICE_INTENT,
@@ -37,6 +39,11 @@ export function registerHealthRoutes(
         active: active.map((p) => p.name),
         unknown: registry.unknown(),
       },
+      // Advertised so the terminal can build its asset selector and interval
+      // tabs from what this miner actually serves, rather than hardcoding a
+      // list that silently drifts out of date.
+      assets: supportedAssets(),
+      intervals: CANDLE_INTERVALS,
       uptimeSeconds: Math.round(process.uptime()),
     });
   });

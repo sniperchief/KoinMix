@@ -23,6 +23,14 @@ const EnvSchema = z.object({
   // ── HTTP server ──────────────────────────────────────────────────────────
   HOST: z.string().min(1).default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
+  /**
+   * Origin allowed to call this miner from a browser, for the demo terminal.
+   *
+   * Defaults to `*` because every route is public read-only market data with no
+   * cookies or credentials, so this grants a browser nothing it could not get
+   * by calling the API directly. Set an explicit origin to restrict it.
+   */
+  CORS_ALLOW_ORIGIN: z.string().min(1).default("*"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
@@ -65,6 +73,19 @@ const EnvSchema = z.object({
         .filter((s) => s.length > 0),
     ),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+
+  /**
+   * How long a successful provider quote may be reused before the provider is
+   * asked again. `0` disables caching.
+   *
+   * Exists because every round fans out to every provider, which drove the
+   * keyless tiers into rate limiting — CoinGecko returned HTTP 429 on 16 of 50
+   * evaluation rounds. The default is deliberately far below
+   * PRICE_MAX_STALENESS_MS: a cached quote keeps its original upstream `asOf`
+   * and goes on ageing, so the staleness bound and the freshness half-life
+   * discount it exactly as they would any other quote of that age.
+   */
+  PROVIDER_CACHE_TTL_MS: z.coerce.number().int().nonnegative().default(3000),
 
   // ── Consensus engine ─────────────────────────────────────────────────────
   /** Minimum number of agreeing provider quotes required to emit a signal. */
@@ -158,7 +179,7 @@ const EnvSchema = z.object({
 export type Config = Readonly<{
   nodeEnv: "development" | "test" | "production";
   isProduction: boolean;
-  http: Readonly<{ host: string; port: number }>;
+  http: Readonly<{ host: string; port: number; corsAllowOrigin: string }>;
   log: Readonly<{ level: string; pretty: boolean }>;
   miner: Readonly<{
     slug: string;
@@ -166,7 +187,11 @@ export type Config = Readonly<{
     minPriceUsdc: number;
     feeAddress?: string;
   }>;
-  providers: Readonly<{ enabled: readonly string[]; timeoutMs: number }>;
+  providers: Readonly<{
+    enabled: readonly string[];
+    timeoutMs: number;
+    cacheTtlMs: number;
+  }>;
   consensus: Readonly<{
     minSources: number;
     maxDeviationBps: number;
@@ -241,7 +266,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   return Object.freeze({
     nodeEnv: env.NODE_ENV,
     isProduction: env.NODE_ENV === "production",
-    http: Object.freeze({ host: env.HOST, port: env.PORT }),
+    http: Object.freeze({
+      host: env.HOST,
+      port: env.PORT,
+      corsAllowOrigin: env.CORS_ALLOW_ORIGIN,
+    }),
     log: Object.freeze({ level: env.LOG_LEVEL, pretty: env.LOG_PRETTY }),
     miner: Object.freeze({
       slug: env.MINER_SLUG,
@@ -252,6 +281,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     providers: Object.freeze({
       enabled: Object.freeze([...env.PRICE_PROVIDERS]),
       timeoutMs: env.PROVIDER_TIMEOUT_MS,
+      cacheTtlMs: env.PROVIDER_CACHE_TTL_MS,
     }),
     consensus: Object.freeze({
       minSources: env.CONSENSUS_MIN_SOURCES,

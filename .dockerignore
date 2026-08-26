@@ -1,0 +1,31 @@
+# Secrets must never enter an image layer. Deleting a file in a later layer does
+# not remove it from the earlier one, so exclusion here is the only real defence.
+.env
+.env.local
+*.pem
+*.key
+
+# Rebuilt inside the image; copying host artifacts risks shipping a stale or
+# platform-mismatched build.
+node_modules/
+dist/
+coverage/
+
+# The terminal is a separate static deployment, not part of the miner image.
+web/
+
+# Not needed at runtime.
+tests/
+scripts/
+.git/
+.gitignore
+.github/
+*.log
+*.md
+!README.md
+.vscode/
+.idea/
+.DS_Store
+vitest.config.ts
+Dockerfile
+.dockerignore

@@ -27,6 +27,42 @@ BTC/USD  (round took 2785ms)
 
 ---
 
+## Why KoinMix?
+
+An autonomous agent that acts on a crypto price has a problem a human trader
+does not: it cannot glance at a second tab and notice something looks off. It
+gets one number, and it acts on it.
+
+Single-source pricing makes that number fragile in ways that are invisible at
+the call site. Venues genuinely disagree — a few basis points on a calm day,
+far more on a thin book. Aggregators serve prices minutes old while reporting
+them as current. Any one API can rate-limit, go down, or return a malformed
+tick that parses cleanly as a number. An agent consuming one feed cannot
+distinguish "the market moved" from "my source is broken."
+
+KoinMix answers with a number *and the evidence behind it*:
+
+- **Multiple independent venues per round**, so no single upstream determines
+  the signal.
+- **A confidence indicator and a spread**, so a caller can tell corroborated
+  agreement from a lone quote and gate its own behaviour on it.
+- **Explicit refusal.** When sources disagree beyond tolerance, or all of them
+  fail, KoinMix returns an error. It never falls back to a stale cache, a
+  last-known value, or a synthesised price. An agent that receives a number from
+  KoinMix knows live sources agreed on it — which is only meaningful because
+  there is no path by which a number is returned when they did not.
+
+The terminal exists to make that evidence legible to a human: per-provider
+quotes, their ages and latencies, what was excluded and why, and how the
+confidence score decomposes.
+
+**What this is not.** KoinMix does not claim to be the most accurate price
+source available, and nothing here is a guarantee. The [Evaluation](#evaluation-phase-4)
+section reports what was actually measured, over a stated sample size, including
+where the results were unimpressive.
+
+---
+
 ## How a Telegraph Miner actually works
 
 Worth stating plainly, because it drives the whole design: **a Telegraph Miner is
@@ -80,6 +116,8 @@ provider can be added without touching validation, consensus, or transport.
 | Evidence weighting | [src/consensus/weighting.ts](src/consensus/weighting.ts) | What an observation is worth, by age and by whether its age can be verified. |
 | Evaluation harness | [scripts/evaluate.ts](scripts/evaluate.ts), [scripts/evaluation/](scripts/evaluation/) | Live accuracy measurement against a held-out reference venue. Not imported by `src/`. |
 | Descriptor verifier | [scripts/verify-onchain.ts](scripts/verify-onchain.ts) | Checks the YAML against the standard and resolves every mapped path against a live response. |
+| Historical candles | [src/market/candles.ts](src/market/candles.ts) | Real OHLCV for the terminal's chart. Undeclared in the YAML — not part of the Telegraph contract. |
+| Terminal (frontend) | [web/](web/) | React demo UI. Reads the miner over HTTP; see [web/README.md](web/README.md). |
 | HTTP transport | [src/http/](src/http/) | Fastify routes, single error boundary, structured request logging. |
 | Errors | [src/errors.ts](src/errors.ts) | Typed hierarchy carrying HTTP status + machine-readable code. |
 | Miner descriptor | [telegraph/koinmix.yaml](telegraph/koinmix.yaml) | The artifact Telegraph nodes read and hash. |
@@ -134,6 +172,18 @@ and re-registering the YAML on-chain.
 `200 ok` when at least one provider is active, `503 degraded` otherwise —
 surfaced rather than hidden.
 
+### `GET /v1/candles?asset=BTC&quote=USD&interval=1h`
+
+Real OHLCV bars for the demo terminal's chart, from Binance (all five intervals
+natively) falling back to Coinbase (1h and 1d only). **Not declared in the miner
+YAML**, so Telegraph never routes to it — CRYPTO_PRICE answers what the price is
+now, and candles exist to draw a chart.
+
+Intervals: `1h`, `4h`, `1d`, `1w`, `1M`. Returns `503` listing each venue's
+reason when no real source can serve the interval, rather than an empty array —
+an empty array reads as "this market has no history", which is a different and
+untrue statement. No bar is ever synthesised or stitched from shorter ones.
+
 ### `GET /telegraph/koinmix.yaml`
 
 Serves the miner descriptor verbatim, so it can be registered on-chain straight
@@ -145,12 +195,25 @@ Every failure returns `{ error, code, details, requestId }`.
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `VALIDATION_FAILED` | 400 | Request failed the Zod contract. |
+| `VALIDATION_FAILED` | 400 | Request failed the Zod contract, **or** named an asset/quote this miner does not carry. The response lists what is supported. |
 | `NO_PROVIDERS_CONFIGURED` | 503 | No live provider wired up, e.g. an empty `PRICE_PROVIDERS`. |
 | `PROVIDER_UNAVAILABLE` | 503 | Providers configured, but all failed or timed out. |
 | `INSUFFICIENT_SOURCES` | 503 | Fewer fresh quotes than `CONSENSUS_MIN_SOURCES`. |
 | `CONSENSUS_FAILED` | 502 | Quotes disagreed beyond the deviation tolerance. |
 | `INTERNAL_ERROR` | 500 | Unexpected; details are logged, never returned. |
+
+**Why 400 and 503 are kept strictly apart.** The status is the only part of a
+failure a Telegraph node acts on automatically, and the two classes call for
+opposite behaviour: 503 means *the answer exists, try again*, while 400 means
+*this request will never succeed*. An unsupported asset therefore answers 400.
+It previously fell through to the provider fan-out, where every adapter declined
+the pair and the round ended as `PROVIDER_UNAVAILABLE` — inviting a node to
+retry, forever, a pair that can never resolve.
+
+The same reasoning splits the two ways a round can come back empty: every
+provider *declining* a pair is a standing capability limit (400), while every
+provider *failing* is an outage (503). Verified live in both directions — an
+unknown asset returns 400 while four dead providers still return 503.
 
 ---
 
@@ -161,7 +224,13 @@ Requires Node.js ≥ 20.11.
 ```bash
 npm install
 cp .env.example .env
-npm run dev          # watch mode on http://localhost:8080
+npm run dev          # miner in watch mode on http://localhost:8080
+```
+
+The demo terminal is a separate package in [web/](web/):
+
+```bash
+cd web && npm install && npm run dev    # terminal on http://localhost:5173
 ```
 
 | Command | Purpose |
@@ -192,6 +261,103 @@ worked around in [vitest.config.ts](vitest.config.ts) via `pool: "threads"`.
 
 ---
 
+## Testing
+
+```bash
+npm run typecheck && npm test     # miner:    197 tests, 9 files
+cd web && npm test && npm run lint # terminal:  10 tests
+```
+
+**197 miner tests** across nine files. What they actually pin:
+
+| File | Covers |
+| --- | --- |
+| `consensus.test.ts` (50) | Median aggregation, staleness filtering, spread guard, outlier detection including the brief's canonical bad tick, weighting maths. |
+| `providers.test.ts` (45) | Each adapter's parsing against exact upstream payload shapes, including malformed ones, plus URL and header construction. |
+| `endToEnd.test.ts` (22) | The full HTTP path, including a GET shaped the way a Telegraph node maps an on-chain request. |
+| `adapter.test.ts` (19) | Validation, the no-provider and all-providers-failed refusals, and the 400-vs-503 status matrix. |
+| `validation.test.ts` (16) | Request contract, including symbols crafted to escape a provider URL. |
+| `evaluation-metrics.test.ts` (13) | The evaluation harness's own statistics. |
+| `candles.test.ts` (12) | OHLC parsing, notably Coinbase's reversed `[time, low, high, open, …]` column order. |
+| `assets.test.ts` (12) | Symbol → per-provider identifier translation. |
+| `cache.test.ts` (8) | TTL reuse and expiry, and that a cache hit ages rather than refreshes. |
+
+**Mocks appear only in tests, never in `src/`.** Test doubles feed adapters
+exact payload shapes — including malformed ones no live API would produce on
+demand — and exercise orchestration under partial failure. The provider registry
+contains no synthetic provider, and the real adapters are verified against the
+live venues by `npm run live:check` and `npm run evaluate`.
+
+---
+
+## Deployment
+
+The miner is a stateless HTTP service. It needs no database, no queue, and no
+persistent volume.
+
+```bash
+docker build -t koinmix-miner .
+docker run -p 8080:8080 --env-file .env koinmix-miner
+```
+
+> **Not yet verified.** The [Dockerfile](Dockerfile) is written against the
+> layout verified below, but no Docker daemon was available on the machine where
+> this was prepared, so the image itself has not been built. Treat it as
+> unproven until you have run the two commands above.
+
+**One non-obvious packaging requirement.**
+[src/http/routes/health.ts](src/http/routes/health.ts) resolves the miner
+descriptor at `../../../telegraph/koinmix.yaml`, which from `dist/http/routes/`
+lands **outside `dist/`**. An image that copies only `dist/` builds fine, boots
+fine, and serves prices fine — and then returns 500 on
+`GET /telegraph/koinmix.yaml`, the one route a Telegraph node fetches to verify
+your on-chain hash. The `telegraph/` directory must ship alongside `dist/`.
+Verified by running the compiled build directly: `/healthz`, the YAML route, and
+a live BTC round all answer 200.
+
+`.dockerignore` excludes `.env` deliberately, not incidentally: deleting a
+secret in a later layer does not remove it from an earlier one, so exclusion is
+the only real defence.
+
+### Requirements
+
+| | |
+| --- | --- |
+| Runtime | Node.js ≥ 20.11 (image uses 22-alpine) |
+| Egress | HTTPS to `api.coingecko.com`, `pro-api.coinmarketcap.com`, `api.binance.com`, `api.exchange.coinbase.com` |
+| Ingress | **Public HTTPS.** Telegraph nodes must reach `base_url` directly. |
+| Credentials | None required — all four providers run keyless. |
+| State | None. Scale horizontally; the quote cache is per-instance and needs no coordination. |
+
+`api.binance.com` answers HTTP 451 in some regions. Where that applies, set
+`BINANCE_BASE_URL` (e.g. `api.binance.us`) or drop `binance` from
+`PRICE_PROVIDERS` — the round degrades to three providers rather than failing.
+
+### Before going live
+
+1. **Set `LOG_PRETTY=false`.** JSON is what aggregators parse, and the
+   startup-failure path can only emit a structured `fatal` line when pretty
+   printing is off — see [src/index.ts](src/index.ts).
+2. **Raise `CONSENSUS_MIN_SOURCES` to ≥ 2.** The default of `1` lets a single
+   provider determine the signal.
+3. **Set `MINER_FEE_ADDRESS`** to the payout address. Public address only.
+4. **Narrow `CORS_ALLOW_ORIGIN`** if you would rather this deployment answered
+   only your own terminal.
+5. **Update `base_url` in [telegraph/koinmix.yaml](telegraph/koinmix.yaml)** to
+   the public origin. It is currently the placeholder
+   `https://miner.koinmix.io`. **Editing the YAML changes its SHA-256**, so do
+   this *before* registering — run `npm run yaml:hash` afterwards and register
+   that hash. See [On-chain registration](#on-chain-registration).
+
+### The terminal
+
+[web/](web/) is a static site and deploys separately — it is excluded from the
+miner image. Build with `npm run build` and serve `web/dist/` from any static
+host, with `VITE_MINER_URL` pointed at the miner's public origin. It holds no
+secrets; every figure it displays comes from the miner at runtime.
+
+---
+
 ## Configuration
 
 All variables are documented in [.env.example](.env.example) and parsed once in
@@ -210,13 +376,16 @@ Only the three entry points load it — library code and tests never do.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `NODE_ENV` | `development` | `development` \| `test` \| `production`. |
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | Listen address. |
+| `CORS_ALLOW_ORIGIN` | `*` | Browser origin allowed to call the miner, for the terminal. Every route is public read-only data with no credentials. |
 | `LOG_LEVEL` / `LOG_PRETTY` | `info` / `false` | Pino level; pretty printing for local dev only. |
 | `MINER_SLUG` / `MINER_SUBNET_ID` | `koinmix-crypto-price` / `9001` | Mirror the YAML's `slug` and `id`. |
 | `MIN_PRICE_USDC` | `0.01` | Floor price per call. Protocol minimum is $0.01. |
 | `MINER_FEE_ADDRESS` | — | Payout address; needed at registration, not runtime. |
-| `PRICE_PROVIDERS` | `coingecko,binance,coinbase` | Providers to enable. Add `coinmarketcap` once you have a key. |
+| `PRICE_PROVIDERS` | `coingecko,coinmarketcap,binance,coinbase` | Providers to enable. All four run keyless, so a fresh checkout serves live prices immediately. |
 | `PROVIDER_TIMEOUT_MS` | `5000` | Per-provider timeout. |
+| `PROVIDER_CACHE_TTL_MS` | `3000` | How long a successful quote may be reused before its provider is asked again. `0` disables. See [Caching](#caching). |
 | `COINMARKETCAP_API_KEY` | — | Optional. Upgrades CMC from its keyless USD-only endpoint to the full Pro API. |
 | `COINGECKO_API_KEY` / `_API_PLAN` | — / `demo` | Optional. Public tier is keyless; `pro` switches host and header. |
 | `BINANCE_BASE_URL` | `api.binance.com` | Override where Binance is geo-restricted (HTTP 451). |
@@ -226,6 +395,9 @@ Only the three entry points load it — library code and tests never do.
 | `PRICE_MAX_STALENESS_MS` | `300000` | Discard quotes older than this. |
 | `PRICE_FRESHNESS_HALFLIFE_MS` | `10000` | Age at which a quote counts for half as much. `0` disables freshness weighting. |
 | `UNVERIFIED_FRESHNESS_WEIGHT` | `0.5` | Weight for a quote whose age cannot be verified. `1` disables the penalty. |
+| `OUTLIER_Z_THRESHOLD` | `3.5` | MAD-based modified z-score above which an observation is called anomalous. |
+| `OUTLIER_MIN_DEVIATION_BPS` | *follows `CONSENSUS_MAX_DEVIATION_BPS`* | Floor below which a quote is never called an outlier. See [Outlier detection](#outlier-detection). |
+| `PROVIDER_WEIGHTS` | *empty* | Optional static per-provider weights, e.g. `coinbase:1.5,binance:1`. Empty means every provider weighs the same. |
 
 ### Providers
 
@@ -263,6 +435,148 @@ live endpoint, and both of which would corrupt output if ignored:
 
 Setting `COINMARKETCAP_API_KEY` upgrades to `/v2/cryptocurrency/quotes/latest`
 in place, which fixes both. That is the recommended production setup.
+
+### Caching
+
+Every round otherwise fans out to every provider, which walks the keyless tiers
+straight into rate limiting — CoinGecko returned HTTP 429 on **16 of 50**
+evaluation rounds at roughly 10 requests/minute. `PROVIDER_CACHE_TTL_MS`
+(default `3000`) lets a successful quote be reused for a few seconds before its
+provider is asked again. Implemented as a decorator in
+[src/providers/cache.ts](src/providers/cache.ts), so no adapter knows it exists.
+
+**A cache hit returns the stored quote verbatim** — the original upstream
+`asOf`, its `timestampProvenance`, the `instrument`, and the latency of the call
+that actually happened. Nothing is restamped to look newer than it is.
+
+That is the property that keeps a cache from becoming a way to pass stale data
+off as live. Because `asOf` is untouched, a cached quote keeps *ageing*: the
+staleness bound still discards it once it is too old, and the freshness
+half-life still discounts its weight as it ages, with no special-casing anywhere
+in the consensus engine. A cached quote is therefore strictly less influential
+than a fresh one. The layer changes how often the miner *asks* upstream; it
+never changes what the miner claims about a price.
+
+Measured on the compiled build (BTC/USD, `PROVIDER_CACHE_TTL_MS=3000`):
+
+| | Server-side round | Summed provider latency |
+| --- | --- | --- |
+| Cache miss | 2396 ms | 4829 ms |
+| Cache hit | **1 ms** | — no upstream call |
+| After TTL expiry | 921 ms | 2281 ms (upstream re-hit) |
+
+Failures are deliberately **not** cached: a provider that just errored is
+retried on the next round rather than having its outage held open locally.
+
+---
+
+## Consensus methodology
+
+The engine ([src/consensus/engine.ts](src/consensus/engine.ts)) is pure and
+deterministic — no I/O, clock by injection — because CRYPTO_PRICE is a Tier A
+intent scored by WASM Exact Match, so two miners handed the same quotes must
+produce byte-identical output.
+
+A round proceeds in fixed order:
+
+1. **Discard stale quotes.** Anything older than `PRICE_MAX_STALENESS_MS`
+   (default 300 s) is dropped and recorded as an exclusion with its age.
+2. **Detect outliers** among what survives (see below).
+3. **Weight each surviving quote** by age and provenance (see below).
+4. **Take the weighted median.** Median rather than mean because a single wild
+   print moves a mean arbitrarily far while it can only move a median to its
+   neighbour.
+5. **Guard the spread.** If surviving quotes still disagree by more than
+   `CONSENSUS_MAX_DEVIATION_BPS` (default 200 bps = 2 %), the round is
+   **refused** with `CONSENSUS_FAILED` rather than answered. Disagreement past
+   that point means the miner does not know the price, and saying so is the
+   honest output.
+6. **Derive the wire format.** The decimal `price` string is computed *from* the
+   integer `priceX1e8`, so the string and the on-chain integer are two views of
+   one value and cannot drift apart.
+
+### Evidence weighting
+
+Weighting exists because the staleness bound alone is a cliff: at 300 s a
+two-minute-old aggregator print counts exactly as much as a one-second-old
+exchange print, right up until it counts for nothing.
+
+- **Freshness.** A quote's weight halves every `PRICE_FRESHNESS_HALFLIFE_MS`
+  (default 10 s) of age. Set to `0` to weigh every surviving quote equally.
+- **Unverifiable timestamps.** A quote whose `asOf` is the provider's *response*
+  time rather than a genuine observation time is multiplied by
+  `UNVERIFIED_FRESHNESS_WEIGHT` (default `0.5`), because it would otherwise be
+  credited with perfect freshness on an unverifiable claim.
+
+This is not free: live evaluation found that disabling the provenance penalty
+while leaving freshness weighting on measured **worse** than disabling both,
+because it moves weight from the source with an honestly old timestamp onto the
+source with an unverifiable one.
+
+A concrete example of why the penalty is needed, measured this session:
+CoinMarketCap's keyless timestamp came back **25 ms ahead of our own clock**, so
+its apparent age floors at zero every round regardless of how old the price
+behind it actually is.
+
+### Outlier detection
+
+Per-observation and per-round only. A provider that produces one anomalous tick
+is never blacklisted, because a venue that is wrong once is usually right
+immediately afterwards.
+
+Detection uses the **MAD-based modified z-score** with a threshold of `3.5` —
+the Iglewicz & Hoaglin (1993) convention, a published figure rather than one
+tuned to make tests pass. Two guards constrain it:
+
+- **A bps floor.** The modified z-score is scale-free, so when sources agree
+  closely the MAD collapses toward zero and *any* difference produces an
+  enormous score. `OUTLIER_MIN_DEVIATION_BPS` sets a floor beneath which nothing
+  is called an outlier; it defaults to following `CONSENSUS_MAX_DEVIATION_BPS`,
+  which makes exclusion self-consistent — an observation is anomalous only if it
+  exceeds the disagreement the round would already have rejected. An earlier
+  fixed 50 bps default was wrong for exactly this reason: given `[100, 101, 100]`
+  the MAD is zero and 101 sits only 100 bps out, so a legitimate third source was
+  excluded and confidence *rose* when it should have fallen.
+- **A surviving majority.** Nothing is excluded below three quotes (no majority
+  exists to arbitrate), or if exclusion would leave fewer than two survivors.
+  Handing a visibly-disagreeing set to the spread guard beats manufacturing
+  false agreement by discarding most of the evidence.
+
+**Honest caveat, unchanged:** outlier detection has **never fired on live data**.
+Zero exclusions across every evaluation round — the floor sits an order of
+magnitude above real cross-venue spread. It is a guard against a broken print,
+not an active part of the pipeline, and should not be presented as one.
+
+## Confidence methodology
+
+`confidence` is a **reliability indicator, not a probability.** It does not
+estimate the chance the price is correct and is not calibrated against any
+outcome distribution. It summarises how much corroboration stood behind an
+answer, so a consumer can tell four-source tight agreement from a lone
+unverified quote. Treating it as a statistical confidence level would be
+unsupported by this methodology.
+
+It is built ([src/consensus/confidence.ts](src/consensus/confidence.ts)) as a
+corroboration base multiplied by penalty factors in `[0,1]` — multiplicative so
+several mild problems compound rather than cancel:
+
+| Base: surviving sources | 1 → `0.50` · 2 → `0.70` · 3 → `0.85` · 4+ → `0.95` |
+| --- | --- |
+| Agreement | up to −30 %, by how much of the deviation budget the spread consumed |
+| Freshness | up to −20 %, by how far the oldest quote sits through the staleness window |
+| Outliers | −10 % per excluded observation |
+| Provider failures | −5 % per failure |
+| Unverifiable timestamps | −5 % per such surviving quote |
+
+The base is **capped at 0.95 and never reaches 1.0**: four venues agreeing is
+strong evidence, but they can still be jointly wrong through a shared upstream
+or a market-wide bad print, so the score never asserts certainty.
+
+Ordering is deliberate — disagreement between sources is the strongest signal
+that a price may be wrong, so it carries the largest weight, while an upstream
+simply being down says comparatively little about the sources that did answer.
+The full breakdown is returned on the debug route, so any score can be
+decomposed into the factors that produced it.
 
 ---
 
@@ -637,16 +951,52 @@ and `auth.type: none` in the YAML means the node injects nothing.
 
 ---
 
+## Performance
+
+Measured against the compiled build on 2026-08-26, BTC/USD, 10 rounds spaced
+beyond the cache TTL so every round genuinely fanned out. Home broadband from
+Western Europe — treat these as indicative, not as a benchmark.
+
+| | Median | p90 | Max |
+| --- | --- | --- | --- |
+| Total request (client wall clock) | 631 ms | 2416 ms | 2416 ms |
+| Server-side round | 602 ms | 1969 ms | 1969 ms |
+| Consensus + formatting only | **16 ms** | 28 ms | 28 ms |
+
+Per-provider upstream latency over the same rounds:
+
+| Provider | Median | p90 |
+| --- | --- | --- |
+| coingecko | 216 ms | 639 ms |
+| coinbase | 244 ms | 777 ms |
+| coinmarketcap | 287 ms | 1952 ms |
+| binance | 556 ms | 1065 ms |
+
+**Latency is upstream latency.** Consensus accounts for roughly 16 ms of a
+~600 ms round — under 3 % — so the cost is dominated entirely by waiting on
+provider APIs, which run concurrently and are bounded by
+`PROVIDER_TIMEOUT_MS`. There is no bottleneck in the aggregation worth
+optimising, and none was optimised. The one change made was the quote cache,
+which addresses request *volume* against rate-limited tiers rather than
+per-round latency — see [Caching](#caching).
+
+---
+
 ## Known limitations
 
 - **Asset coverage is a curated table.** BTC, ETH, SOL and XRP are mapped in
   [assets.ts](src/providers/assets.ts); anything else is refused rather than
   guessed. A wrong CoinGecko slug would silently price the wrong token, so the
   table is deliberate — but it does not scale to thousands of assets.
-- **No caching or rate-limit handling.** Every request fans out to every
-  provider. CoinGecko's keyless tier returns HTTP 429 under sustained load —
-  measured at 16 rejections across 50 evaluation rounds (~10 req/min), making
-  this the largest single reliability problem in the miner.
+- **Rate-limit handling is a cache, not a strategy.** `PROVIDER_CACHE_TTL_MS`
+  cuts repeat traffic (a hit costs 1 ms and no upstream call), which was enough
+  to address the measured problem: CoinGecko's keyless tier returned HTTP 429 on
+  16 of 50 evaluation rounds at ~10 req/min. But there is still **no 429 backoff
+  and no request coalescing** — two rounds for the same pair arriving
+  simultaneously both miss the cache and both hit upstream. Under genuinely
+  concurrent load the 429s will return.
+- **The cache is per-instance.** Horizontal scaling multiplies upstream request
+  volume by the instance count.
 - **`CONSENSUS_MIN_SOURCES` defaults to 1**, so a single provider can currently
   determine the signal. Measured at 2 rounds in 25 during evaluation. Raise it
   to ≥ 2 before serving real traffic, accepting the extra refusals.
@@ -671,8 +1021,10 @@ and `auth.type: none` in the YAML means the node injects nothing.
 
 ## Next
 
-- Add per-provider caching and 429 backoff — the evaluation says this now buys
-  more served-request accuracy than any further tuning of the aggregation.
+- Add 429 backoff and single-flight request coalescing. The quote cache landed
+  in Phase 7 and handles repeat traffic; coalescing was deliberately left out
+  because sharing one in-flight promise across callers lets one round's timeout
+  abort another's, which is not a change worth making during a hardening pass.
 - Re-run `npm run evaluate` during a volatile window and over more assets; the
   current numbers come from two calm-to-moderate hours.
 - Investigate the unimproved tail: which rounds produce the worst error, and

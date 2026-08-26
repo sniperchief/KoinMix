@@ -4,6 +4,7 @@ import type { Config } from "../config/env.js";
 import { isKoinMixError } from "../errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ProviderRegistry } from "../providers/registry.js";
+import { registerCandleRoutes } from "./routes/candles.js";
 import { registerCryptoPriceRoutes } from "./routes/cryptoPrice.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import type { AppServer } from "./types.js";
@@ -23,12 +24,36 @@ export function buildServer(
     bodyLimit: 64 * 1024,
   });
 
+  /**
+   * CORS for the demo terminal, which is served from a different origin.
+   *
+   * Safe to allow broadly here: every route is a public, read-only market-data
+   * lookup, there are no cookies or credentials, and `credentials` is never
+   * enabled — so a permissive origin grants a browser nothing it could not get
+   * by calling the API directly. Narrow it with CORS_ALLOW_ORIGIN if you would
+   * rather this deployment only answer your own frontend.
+   */
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("access-control-allow-origin", config.http.corsAllowOrigin);
+    reply.header("vary", "origin");
+
+    if (request.method === "OPTIONS") {
+      reply
+        .header("access-control-allow-methods", "GET, POST, OPTIONS")
+        .header("access-control-allow-headers", "content-type")
+        .header("access-control-max-age", "600")
+        .code(204)
+        .send();
+    }
+  });
+
   registerHealthRoutes(app, config, registry);
   registerCryptoPriceRoutes(app, {
     config,
     registry,
     logger,
   });
+  registerCandleRoutes(app, config);
 
   /**
    * Single error boundary. Known failures map to their declared status and a

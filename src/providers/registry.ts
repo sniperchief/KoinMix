@@ -1,5 +1,6 @@
 import type { Config } from "../config/env.js";
 import type { AppLogger } from "../logging/logger.js";
+import { withCache } from "./cache.js";
 import { createBinanceProvider } from "./binance.js";
 import { createCoinbaseProvider } from "./coinbase.js";
 import { createCoinGeckoProvider } from "./coingecko.js";
@@ -67,8 +68,14 @@ export function createProviderRegistry(
       continue;
     }
 
-    active.push(provider);
-    logger.info({ provider: name }, "price provider registered");
+    // Cache at the registry, not inside any adapter: the decorator is
+    // provider-agnostic, and holding it here means one cache instance per
+    // registry rather than a process-wide singleton leaking between tests.
+    active.push(withCache(provider, config.providers.cacheTtlMs));
+    logger.info(
+      { provider: name, cacheTtlMs: config.providers.cacheTtlMs },
+      "price provider registered",
+    );
   }
 
   if (active.length === 0) {

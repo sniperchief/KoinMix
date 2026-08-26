@@ -229,9 +229,15 @@ describe("e2e — error handling", () => {
       url: "/v1/price?asset=NOTACOIN",
     });
 
-    // Every provider declined the pair, so nothing was quoted.
-    expect(res.statusCode).toBe(503);
-    expect(res.json<{ code: string }>().code).toBe("PROVIDER_UNAVAILABLE");
+    // An asset this miner does not carry is a contract error, not an outage.
+    // 503 would tell the node to retry a request that can never succeed, so the
+    // status here is load-bearing rather than cosmetic.
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ code: string }>().code).toBe("VALIDATION_FAILED");
+    expect(
+      res.json<{ details: { supportedAssets: string[] } }>().details
+        .supportedAssets,
+    ).toContain("BTC");
   });
 
   it("rejects an unsupported intent", async () => {
