@@ -194,6 +194,10 @@ describe("response formatting", () => {
     discardedStale: [],
     excluded: [],
     weighted: false,
+    weights: [
+      { provider: "alpha", weight: 1 },
+      { provider: "bravo", weight: 1 },
+    ],
   };
 
   it("keeps the decimal string and the scaled integer consistent", () => {

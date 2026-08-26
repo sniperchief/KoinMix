@@ -598,3 +598,136 @@ describe("consensus — provider weighting", () => {
     ).toBe(reachConsensus(quotes, options).price);
   });
 });
+
+/**
+ * Freshness and provenance weighting (added in Phase 4).
+ *
+ * These are not preferences about providers — they are the two properties of an
+ * observation that bear on how much it says about the price *now*. The live
+ * evaluation harness measured uniform weighting losing ~2 bps of accuracy and
+ * roughly doubling the worst round against a held-out venue; these tests pin the
+ * mechanism that fixed it.
+ */
+describe("consensus — freshness weighting", () => {
+  // 30s and 120s before NOW, both inside the 60s... note the staleness bound in
+  // `options` is 60s, so weighting is exercised with a wider bound here.
+  const aged = { ...options, maxStalenessMs: 600_000 };
+  const RECENT = "2026-08-24T11:59:59.000Z"; // 1s old
+  const OLD = "2026-08-24T11:58:00.000Z"; // 2min old
+
+  it("pulls consensus into the fresh cluster when sources split by age", () => {
+    // The shape actually observed in live evaluation: two exchanges reporting
+    // near-instant prices, two aggregators reporting prices from a while ago,
+    // and the market having moved in between. A plain median of four lands on
+    // the midpoint of one fresh and one lagged quote — i.e. it splits the
+    // difference with a price nobody currently trades at.
+    const quotes = [
+      quote("fresh-one", 100, RECENT),
+      quote("fresh-two", 100.1, RECENT),
+      quote("laggard-one", 101, OLD),
+      quote("laggard-two", 101.1, OLD),
+    ];
+
+    const uniformResult = reachConsensus(quotes, {
+      ...aged,
+      freshnessHalfLifeMs: 0,
+    });
+    const weightedResult = reachConsensus(quotes, {
+      ...aged,
+      freshnessHalfLifeMs: 10_000,
+    });
+
+    expect(uniformResult.price).toBeCloseTo(100.55, 6);
+    expect(weightedResult.price).toBeCloseTo(100.1, 6);
+    expect(weightedResult.weighted).toBe(true);
+  });
+
+  it("leaves consensus untouched when every quote is equally fresh", () => {
+    const quotes = [
+      quote("alpha", 100, RECENT),
+      quote("bravo", 101, RECENT),
+      quote("charlie", 102, RECENT),
+    ];
+
+    const result = reachConsensus(quotes, {
+      ...aged,
+      freshnessHalfLifeMs: 10_000,
+    });
+
+    // Equal ages means equal freshness, so the weighted median must still be
+    // the plain one — the change must not perturb the ordinary case.
+    expect(result.price).toBe(101);
+    expect(result.weighted).toBe(false);
+  });
+
+  it("halves the weight of a quote at exactly the half-life", () => {
+    const halfLife = 10_000;
+    const atHalfLife = new Date(NOW.getTime() - halfLife).toISOString();
+
+    const result = reachConsensus(
+      [quote("fresh", 100, NOW.toISOString()), quote("aged", 101, atHalfLife)],
+      { ...aged, freshnessHalfLifeMs: halfLife },
+    );
+
+    const fresh = result.weights.find((w) => w.provider === "fresh")!;
+    const half = result.weights.find((w) => w.provider === "aged")!;
+    expect(half.weight).toBeCloseTo(fresh.weight / 2, 4);
+  });
+
+  it("discounts a quote whose timestamp cannot be age-verified", () => {
+    const quotes = [
+      quote("verified", 100, RECENT),
+      quote("unverified", 101, RECENT, { timestampProvenance: "response" }),
+    ];
+
+    const result = reachConsensus(quotes, {
+      ...aged,
+      unverifiedFreshnessWeight: 0.5,
+    });
+
+    const verified = result.weights.find((w) => w.provider === "verified")!;
+    const unverified = result.weights.find((w) => w.provider === "unverified")!;
+    expect(unverified.weight).toBeCloseTo(verified.weight / 2, 4);
+  });
+
+  it("never lets a weight reach zero and delete a source", () => {
+    // A quote from the epoch, with the penalty turned all the way down: the
+    // weight must still be positive, because dropping a source is exclusion —
+    // a decision the outlier detector makes explicitly and records.
+    const result = reachConsensus(
+      [
+        quote("normal", 100, NOW.toISOString()),
+        quote("ancient", 101, "1970-01-01T00:00:00.000Z", {
+          timestampProvenance: "response",
+        }),
+      ],
+      {
+        ...aged,
+        maxStalenessMs: Number.MAX_SAFE_INTEGER,
+        freshnessHalfLifeMs: 1,
+        unverifiedFreshnessWeight: 0,
+      },
+    );
+
+    expect(result.sourceCount).toBe(2);
+    for (const { weight } of result.weights) {
+      expect(weight).toBeGreaterThan(0);
+    }
+  });
+
+  it("is disabled by a zero half-life, restoring uniform weighting", () => {
+    const quotes = [
+      quote("fresh", 100, RECENT),
+      quote("stale", 101, OLD),
+    ];
+
+    const result = reachConsensus(quotes, {
+      ...aged,
+      freshnessHalfLifeMs: 0,
+      unverifiedFreshnessWeight: 1,
+    });
+
+    expect(result.price).toBe(100.5);
+    expect(result.weighted).toBe(false);
+  });
+});

@@ -4,11 +4,21 @@ import { CRYPTO_PRICE_INTENT, isSupportedIntent } from "./intents.js";
 /**
  * Request/response contracts for the CRYPTO_PRICE intent.
  *
- * Telegraph does not publish a fixed wire schema per intent — the YAML Standard
- * has each miner declare its own `endpoints`, `input_schema` and `output_schema`,
- * and the node maps on-chain arrays onto them via `on_chain.request`. These
- * schemas are the authoritative definition of the KoinMix contract and are
- * mirrored verbatim into telegraph/koinmix.yaml.
+ * Telegraph publishes no fixed wire schema per intent. The YAML Standard is
+ * explicit that "the upstream HTTP JSON response is free-form … no predefined
+ * response schema is enforced on miners": a node reads whatever it needs out of
+ * the body by dot-path, via `on_chain.fields[].source_path` and
+ * `semantics.signal_mapping`. This module is therefore the authoritative
+ * definition of the KoinMix contract, and every field it declares is either
+ * referenced by telegraph/koinmix.yaml or identifies the answer.
+ *
+ * Because the response is free-form rather than validated by the node, the
+ * discipline has to come from our side: nothing internal is emitted here just
+ * because it would be interesting. Round-level diagnostics — exclusions, the
+ * weights each quote carried, per-provider failures — are deliberately NOT part
+ * of this contract. They are logged, and served separately by the undeclared
+ * debug route, so what a Telegraph node receives stays exactly what the YAML
+ * describes.
  */
 
 /**
@@ -91,19 +101,6 @@ export const CryptoPriceResponseSchema = z.object({
   deviationBps: z.number().int().nonnegative(),
   /** Peak-to-peak disagreement across contributing quotes, in bps. */
   spreadBps: z.number().int().nonnegative(),
-  /**
-   * Observations excluded from this calculation, with the reason. Exclusion is
-   * per-round only — no provider is blacklisted.
-   */
-  excluded: z.array(
-    z.object({
-      provider: z.string(),
-      price: z.number(),
-      deviationBps: z.number().int().nonnegative(),
-      reason: z.enum(["stale", "outlier"]),
-      detail: z.string(),
-    }),
-  ),
 
   /** Provider-reported observation time of the consensus price (ISO 8601). */
   asOf: z.string().datetime(),

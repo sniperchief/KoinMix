@@ -1,9 +1,13 @@
 import { ConfigError, loadConfig } from "./config/env.js";
+import { loadEnvFile } from "./config/loadEnvFile.js";
 import { createLogger } from "./logging/logger.js";
 import { createProviderRegistry } from "./providers/registry.js";
 import { buildServer } from "./http/server.js";
 
 async function main(): Promise<void> {
+  // Before loadConfig(), and before anything else reads the environment.
+  loadEnvFile();
+
   const config = loadConfig();
   const logger = createLogger(config);
 

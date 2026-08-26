@@ -1,6 +1,6 @@
 import { loadConfig, type Config } from "../src/config/env.js";
 import { pino } from "pino";
-import type { AppLogger } from "../src/logging/logger.js";
+import type { Logger } from "../src/logging/logger.js";
 import type { ProviderRegistry } from "../src/providers/registry.js";
 import type { PriceProvider, PriceQuote } from "../src/providers/types.js";
 
@@ -13,7 +13,13 @@ import type { PriceProvider, PriceQuote } from "../src/providers/types.js";
  * `src/`.
  */
 
-export const silentLogger: AppLogger = pino({ level: "silent" });
+/**
+ * Typed as the full pino `Logger` rather than the narrower `AppLogger`, because
+ * `buildServer` needs a real logger instance. A pino logger satisfies
+ * `AppLogger` structurally, so this still works everywhere `AppLogger` is asked
+ * for.
+ */
+export const silentLogger: Logger = pino({ level: "silent" });
 
 export function testConfig(overrides: NodeJS.ProcessEnv = {}): Config {
   return loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", ...overrides });

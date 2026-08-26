@@ -1,4 +1,5 @@
 import {
+  handleCryptoPriceDiagnostics,
   handleCryptoPriceRequest,
   type AdapterDeps,
 } from "../../telegraph/adapter.js";
@@ -36,5 +37,26 @@ export function registerCryptoPriceRoutes(
       logger: request.log,
     });
     return reply.code(200).send(result);
+  });
+
+  /**
+   * Operator diagnostics. NOT declared in telegraph/koinmix.yaml and therefore
+   * not reachable through Telegraph — the node only ever proxies the endpoints
+   * the YAML lists.
+   *
+   * This exists so that inspecting a round costs nothing on the contract side.
+   * The alternative, a flag on /v1/price that swells the response, would put
+   * internal state one query parameter away from the bytes a validator scores.
+   *
+   * It runs a full independent round, so it reflects the market at the moment
+   * it is called, not the moment some earlier /v1/price call was served. Use the
+   * logs to explain a specific served response.
+   */
+  app.get("/v1/price/debug", async (request, reply) => {
+    const { response, diagnostics } = await handleCryptoPriceDiagnostics(
+      request.query,
+      { ...deps, logger: request.log },
+    );
+    return reply.code(200).send({ response, diagnostics });
   });
 }

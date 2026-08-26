@@ -44,51 +44,26 @@ endpoints:
       Spot price of `asset` denominated in `quote`, by median consensus across
       live providers.
 
-# ── Schema hints ─────────────────────────────────────────────────────────────
-input_schema:
-  type: object
-  required: [asset]
-  properties:
-    asset:
-      type: string
-      description: Base asset ticker symbol, e.g. BTC.
-    quote:
-      type: string
-      default: USD
-      description: Quote currency code, e.g. USD.
-
-output_schema:
-  type: object
-  required: [asset, quote, price, priceX1e8, confidence, asOf]
-  properties:
-    intent: { type: string }
-    asset: { type: string }
-    quote: { type: string }
-    price:
-      type: string
-      description: Decimal price as a canonical string, trailing zeros trimmed.
-    priceX1e8:
-      type: integer
-      description: Price scaled by 1e8 for on-chain integer storage.
-    confidence:
-      type: number
-      minimum: 0
-      maximum: 1
-      description: >
-        Reliability indicator, not a probability. Combines source count,
-        agreement, freshness, outliers and provider failures.
-    sourceCount: { type: integer }
-    spreadBps:
-      type: integer
-      description: Peak-to-peak disagreement across sources, in basis points.
-    sources: { type: array, items: { type: string } }
-    method: { type: string, enum: [single, median] }
-    deviationBps: { type: integer }
-    asOf: { type: string, format: date-time }
-    observedAt: { type: string, format: date-time }
-    isStale: { type: boolean }
-    minerSlug: { type: string }
-    explanation: { type: string }
+# ── Request / response shape ─────────────────────────────────────────────────
+# Recorded as comments, deliberately NOT as `input_schema` / `output_schema`
+# keys. The YAML Standard's top-level field list is closed — version, kind, id,
+# slug, protocol, name, description, base_url, auth, the rate/circuit settings,
+# endpoints, semantics, on_chain — and schema blocks are not part of it. The
+# standard also states plainly that the upstream JSON response is free-form and
+# read by dot-path, so a declared schema would buy nothing while risking
+# rejection by a strict validator.
+#
+#   Request   GET /v1/price?asset=BTC&quote=USD
+#             asset  required, ticker symbol
+#             quote  optional, defaults to USD
+#
+#   Response  intent, asset, quote, price (decimal string), priceX1e8 (integer),
+#             confidence (0..1), sourceCount, sources[], method, deviationBps,
+#             spreadBps, asOf, observedAt, isStale, minerSlug, explanation
+#
+# The authoritative definition is src/telegraph/schema.ts, which is validated by
+# the test suite. Round diagnostics are not part of the response; they are
+# logged and served by an undeclared debug route.
 
 # ── Semantics ────────────────────────────────────────────────────────────────
 semantics:
@@ -105,9 +80,14 @@ semantics:
     label_field: price
     reason_field: explanation
   supported_intents:
-    # `crypto_price` is listed in the hackathon intent catalog (Financial Data,
-    # Tier A, WASM Exact Match) but not in the 27-entry canonical list in the
-    # core docs, which predates that catalog. See README.md.
+    # Lower snake_case is the wire form. The hackathon catalog renders this
+    # intent as CRYPTO_PRICE, but it renders every intent that way — including
+    # WEATHER_CHECK, which the YAML Standard lists as `weather_check` — so the
+    # casing there is presentational. See src/telegraph/intents.ts.
+    #
+    # Still open: `crypto_price` is not among the canonical 27 intents, and the
+    # registry docs warn that non-canonical intents are "accepted but will not
+    # be routed by the autonomous engine". See README.md.
     - crypto_price
 
 # ── On-chain bridge ──────────────────────────────────────────────────────────

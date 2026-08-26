@@ -6,11 +6,18 @@ import {
   type QuoteExclusion,
 } from "./outliers.js";
 import { deviationBps, roundTo, weightedMedian } from "./stats.js";
+import {
+  DEFAULT_FRESHNESS_HALF_LIFE_MS,
+  DEFAULT_UNVERIFIED_FRESHNESS_WEIGHT,
+  quoteWeight,
+  type WeightingOptions,
+} from "./weighting.js";
 
 /**
  * Consensus engine.
  *
- *   quotes → freshness filter → outlier detection → consensus → spread → confidence
+ *   quotes → freshness filter → outlier detection → weighting → consensus
+ *          → spread → confidence
  *
  * Pure and deterministic: no I/O, no clock reads beyond the injected `now`, no
  * randomness, and order-independent. CRYPTO_PRICE is a Tier A intent scored by
@@ -40,13 +47,24 @@ export interface ConsensusOptions {
   /**
    * Per-provider weights applied to the weighted median, keyed by provider name.
    *
-   * Defaults to equal weighting for every provider, and that default is
-   * deliberate: we have no evidence that any of these venues is systematically
-   * more accurate than the others, and inventing weights without evidence would
-   * bias the signal on nothing but taste. Weights become justifiable once the
-   * evaluation harness produces per-provider error data.
+   * Still defaults to equal weighting for every provider, and still deliberately
+   * so. The evaluation harness does now produce per-provider error data, but
+   * that data is measured against a reference venue, and any reference is itself
+   * just another venue — scoring against a spot exchange will always flatter
+   * spot exchanges. Weighting by vendor identity on that basis would bake our
+   * choice of reference into the signal. Weighting by observation age and
+   * verifiability (below) needs no such appeal.
    */
   readonly weights?: Readonly<Record<string, number>>;
+
+  /**
+   * Age at which a quote's weight halves. See src/consensus/weighting.ts.
+   * Zero disables freshness weighting.
+   */
+  readonly freshnessHalfLifeMs?: number;
+
+  /** Weight multiplier for quotes with an unverifiable observation time. */
+  readonly unverifiedFreshnessWeight?: number;
 
   /** Providers that failed this round; lowers confidence, never the price. */
   readonly providerFailureCount?: number;
@@ -70,8 +88,19 @@ export interface ConsensusResult {
   readonly discardedStale: readonly string[];
   /** Every excluded observation, with reason and deviation. */
   readonly excluded: readonly QuoteExclusion[];
-  /** True when weights were non-uniform. */
+  /** True when the surviving quotes did not all carry the same weight. */
   readonly weighted: boolean;
+  /**
+   * The effective weight each surviving quote carried.
+   *
+   * Not part of the wire response, but logged: once weights vary per round it
+   * is otherwise impossible to reconstruct after the fact why a price landed
+   * where it did between its inputs.
+   */
+  readonly weights: ReadonlyArray<{
+    readonly provider: string;
+    readonly weight: number;
+  }>;
 }
 
 const PRICE_SCALE = 1e8;
@@ -132,16 +161,25 @@ export function reachConsensus(
   }
 
   // ── 3. Consensus ─────────────────────────────────────────────────────────
-  const weights = options.weights ?? {};
-  const weighted = kept.some((q) => (weights[q.provider] ?? 1) !== 1);
+  const weightingOptions: WeightingOptions = {
+    now: options.now,
+    freshnessHalfLifeMs:
+      options.freshnessHalfLifeMs ?? DEFAULT_FRESHNESS_HALF_LIFE_MS,
+    unverifiedFreshnessWeight:
+      options.unverifiedFreshnessWeight ?? DEFAULT_UNVERIFIED_FRESHNESS_WEIGHT,
+    providerWeights: options.weights ?? {},
+  };
 
-  const price = weightedMedian(
-    kept.map((q) => ({
-      price: q.price,
-      weight: resolveWeight(weights, q.provider),
-      provider: q.provider,
-    })),
-  );
+  const entries = kept.map((q) => ({
+    price: q.price,
+    weight: quoteWeight(q, weightingOptions),
+    provider: q.provider,
+  }));
+
+  const first = entries[0]!.weight;
+  const weighted = entries.some((e) => e.weight !== first);
+
+  const price = weightedMedian(entries);
 
   // ── 4. Spread ────────────────────────────────────────────────────────────
   // Two complementary views of disagreement, both relative to the consensus:
@@ -203,21 +241,13 @@ export function reachConsensus(
     discardedStale: staleExclusions.map((e) => e.provider),
     excluded,
     weighted,
+    // 6dp, not 4: the weight floor in weighting.ts is 1e-6, and rounding to 4
+    // would render a deliberately-tiny-but-nonzero weight as a flat 0 — exactly
+    // the "this source was dropped" reading the floor exists to avoid.
+    weights: entries
+      .map((e) => ({ provider: e.provider, weight: roundTo(e.weight, 6) }))
+      .sort((a, b) => a.provider.localeCompare(b.provider)),
   };
-}
-
-/**
- * Look up a provider's weight, ignoring anything not usable as one. A
- * misconfigured weight must not silently zero out a source.
- */
-function resolveWeight(
-  weights: Readonly<Record<string, number>>,
-  provider: string,
-): number {
-  const weight = weights[provider];
-  return typeof weight === "number" && Number.isFinite(weight) && weight > 0
-    ? weight
-    : 1;
 }
 
 /**

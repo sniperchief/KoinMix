@@ -7,18 +7,23 @@
  *  - YAML Standard canonical lists (27 intents, 7 signal types):
  *    https://telegraph-2.gitbook.io/telegraph/miner-registry/yaml-standard.md
  *
- * NOTE ON A DOCUMENTATION DISCREPANCY (verified 2026-08-24):
+ * CASING, RESOLVED (verified 2026-08-25):
  * `CRYPTO_PRICE` appears in the hackathon catalog under "Financial Data"
- * (Tier A, evaluated by WASM Exact Match) but does NOT appear in the 27-entry
- * canonical intent list in the core YAML Standard docs, which predates the
- * hackathon catalog. The YAML Standard writes intents in lower snake_case, and
- * the Miner Registry docs state that intents outside the canonical list are
- * "accepted but will not be routed by the autonomous engine".
+ * (Tier A, WASM Exact Match) but not in the 27-entry canonical intent list in
+ * the YAML Standard, which predates the catalog. That raised the question of
+ * which spelling to register.
  *
- * We therefore declare BOTH spellings and treat them as equivalent on input, so
- * the miner answers whichever casing the node actually dispatches. The exact
- * on-chain string to pass to `registerMiner()` is called out in README.md as an
- * item to confirm with the Telegraph team before registration.
+ * The catalog answers it: it renders EVERY intent in upper snake case,
+ * including ones the YAML Standard lists in lower snake case — `WEATHER_CHECK`
+ * in the catalog is `weather_check` in the standard, likewise `STORM_ALERT` and
+ * `WEATHER_FORECAST`. The casing is therefore presentational, and the wire form
+ * is the standard's lower snake case. We declare `crypto_price`.
+ *
+ * Input remains case-insensitive (see `isSupportedIntent`) so the miner answers
+ * whichever spelling a node actually dispatches. What stays genuinely open is
+ * routing, not casing: the Miner Registry docs say intents outside the canonical
+ * 27 are "accepted but will not be routed by the autonomous engine", and
+ * `crypto_price` is not among those 27. See README.md.
  */
 
 /** The intent this miner serves, in YAML Standard (snake_case) form. */

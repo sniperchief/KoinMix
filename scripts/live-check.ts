@@ -12,10 +12,13 @@
  * Exits non-zero if no provider returned a usable price.
  */
 import { loadConfig } from "../src/config/env.js";
+import { loadEnvFile } from "../src/config/loadEnvFile.js";
 import { createLogger } from "../src/logging/logger.js";
 import { collectQuotes } from "../src/providers/collect.js";
 import { createProviderRegistry, knownProviderNames } from "../src/providers/registry.js";
 import { supportedAssets } from "../src/providers/assets.js";
+
+loadEnvFile();
 
 const config = loadConfig();
 // Keep the transcript readable: provider failures are reported in the table.

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  DEFAULT_FRESHNESS_HALF_LIFE_MS,
+  DEFAULT_UNVERIFIED_FRESHNESS_WEIGHT,
+} from "../consensus/weighting.js";
 
 /**
  * The ONLY module in the application permitted to read `process.env`.
@@ -111,6 +115,36 @@ const EnvSchema = z.object({
       return weights;
     }),
   /**
+   * Age at which a quote's weight halves in the weighted median.
+   *
+   * Freshness weighting exists because the staleness bound alone is a cliff: at
+   * 300s a two-minute-old aggregator print counts exactly as much as a
+   * one-second-old exchange print, right up until it counts for nothing. Live
+   * evaluation showed that cliff costing real accuracy — see the Phase 4
+   * results in the README. Set to 0 to weigh every surviving quote equally.
+   */
+  PRICE_FRESHNESS_HALFLIFE_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(DEFAULT_FRESHNESS_HALF_LIFE_MS),
+
+  /**
+   * Weight multiplier for a quote whose `asOf` is a response time rather than
+   * an observation time, i.e. whose real age we cannot verify.
+   *
+   * 1 disables the penalty. Note that disabling it while leaving freshness
+   * weighting on measured *worse* than doing neither, because it moves weight
+   * from the source with an honestly old timestamp onto the source with an
+   * unverifiable one.
+   */
+  UNVERIFIED_FRESHNESS_WEIGHT: z.coerce
+    .number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_UNVERIFIED_FRESHNESS_WEIGHT),
+
+  /**
    * Quotes older than this are discarded before consensus.
    *
    * Generous by default because upstream observation times vary a lot:
@@ -141,6 +175,8 @@ export type Config = Readonly<{
     /** Undefined means "follow maxDeviationBps". */
     outlierMinDeviationBps: number | undefined;
     weights: Readonly<Record<string, number>>;
+    freshnessHalfLifeMs: number;
+    unverifiedFreshnessWeight: number;
   }>;
   /**
    * Provider credentials, captured once from the environment. Keys are the raw
@@ -224,6 +260,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       outlierZThreshold: env.OUTLIER_Z_THRESHOLD,
       outlierMinDeviationBps: env.OUTLIER_MIN_DEVIATION_BPS,
       weights: Object.freeze({ ...env.PROVIDER_WEIGHTS }),
+      freshnessHalfLifeMs: env.PRICE_FRESHNESS_HALFLIFE_MS,
+      unverifiedFreshnessWeight: env.UNVERIFIED_FRESHNESS_WEIGHT,
     }),
     secret: (name: string) => secrets.get(name),
     setting: (name: string) => settings.get(name),
