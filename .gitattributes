@@ -1,0 +1,23 @@
+# Normalise line endings so a checkout is byte-identical on every platform.
+* text=auto eol=lf
+
+# The miner descriptor is HASHED, not merely read.
+#
+# `registerMiner()` commits the SHA-256 of these exact bytes on-chain, and every
+# Telegraph node recomputes that hash over the YAML it fetches from `base_url`.
+# The two must agree or the miner fails verification while appearing perfectly
+# healthy — it serves prices normally and nothing in its logs explains the
+# rejection.
+#
+# This is not hypothetical. A Windows checkout with core.autocrlf=true rewrote
+# this file's endings to CRLF, adding 161 bytes: `npm run yaml:hash` reported
+# 67b5fab0… from the working copy while the Linux container served 8e485af6…
+# from the repo bytes. Pinning the file to LF keeps working copy, repo, and
+# deployed image in agreement, so the hash is the same wherever it is computed.
+*.yaml text eol=lf
+*.yml  text eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.svg text eol=lf

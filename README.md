@@ -11,6 +11,34 @@ miner returns an error rather than a number. `npm run evaluate` scores the
 aggregation against a held-out venue on live data; see
 [Evaluation](#evaluation-phase-4) for what it measured and what it changed.
 
+## Live deployment
+
+| | URL |
+| --- | --- |
+| **Miner** — the Telegraph product | <https://koinmix-production.up.railway.app> |
+| **Terminal** — the evidence viewer | <https://koinmix-terminal.vercel.app> |
+
+The miner is the submission: a plain HTTP service a Telegraph node would proxy
+to. The terminal exists to make its reasoning visible to a human and is not part
+of the miner contract.
+
+Try the contract endpoint directly — this is exactly the call a node makes,
+mapping on-chain `strings[0]` and `strings[1]` onto the two query params:
+
+```bash
+curl "https://koinmix-production.up.railway.app/v1/price?asset=BTC&quote=USD"
+curl  https://koinmix-production.up.railway.app/healthz
+curl  https://koinmix-production.up.railway.app/telegraph/koinmix.yaml
+```
+
+**Not registered on-chain.** No Telegraph node routes to this miner yet, so the
+terminal calls it directly and says so rather than drawing a node hop that is
+not happening. The remaining blockers are a payout address and a signed
+registration transaction — deployment values, not code. See
+[On-chain registration](#on-chain-registration).
+
+---
+
 Verify it against the live APIs yourself:
 
 ```console
@@ -343,11 +371,12 @@ the only real defence.
 3. **Set `MINER_FEE_ADDRESS`** to the payout address. Public address only.
 4. **Narrow `CORS_ALLOW_ORIGIN`** if you would rather this deployment answered
    only your own terminal.
-5. **Update `base_url` in [telegraph/koinmix.yaml](telegraph/koinmix.yaml)** to
-   the public origin. It is currently the placeholder
-   `https://miner.koinmix.io`. **Editing the YAML changes its SHA-256**, so do
-   this *before* registering — run `npm run yaml:hash` afterwards and register
-   that hash. See [On-chain registration](#on-chain-registration).
+5. **Keep `base_url` in [telegraph/koinmix.yaml](telegraph/koinmix.yaml)** equal
+   to the origin actually serving it — currently
+   `https://koinmix-production.up.railway.app`. **Editing the YAML changes its
+   SHA-256**, so make any edit *before* registering, then run
+   `npm run yaml:hash` and register that hash. See
+   [On-chain registration](#on-chain-registration).
 
 ### The terminal
 
@@ -887,7 +916,7 @@ DIAMOND=0x122396E8602BEed349434AA6E83123E7dD97F5A0   # Base Sepolia
 
 cast send "$DIAMOND" \
   "registerMiner(string,bytes32,address,uint256,string[])" \
-  "https://miner.koinmix.io/telegraph/koinmix.yaml" \
+  "https://koinmix-production.up.railway.app/telegraph/koinmix.yaml" \
   "$YAML_HASH" \
   "$MINER_FEE_ADDRESS" \
   10000 \
@@ -911,7 +940,7 @@ value only the operator or the Telegraph team can supply.
 
 | Requirement | Status | What it needs |
 | --- | --- | --- |
-| Public HTTPS origin | **outstanding** | `base_url` in the YAML is `https://miner.koinmix.io`, a placeholder. It must point at a real deployment reachable by nodes, and the YAML must be served from it. Editing it changes the hash. |
+| Public HTTPS origin | **ready** | Deployed at `https://koinmix-production.up.railway.app`, which serves the descriptor at `/telegraph/koinmix.yaml` and is the value of `base_url`. Verified live: health, prices for all four assets, and the YAML route. |
 | `MINER_FEE_ADDRESS` | **outstanding** | The EVM address that receives payouts. Unset — the config accepts it but no value is committed anywhere in this repo. |
 | `MINER_PRIVATE_KEY` / `RPC` | **outstanding** | Used only by the `cast send` above, at the operator's machine. Never read by the miner. |
 | Registration hash | ready | `npm run yaml:hash`, recomputed after any YAML edit. |

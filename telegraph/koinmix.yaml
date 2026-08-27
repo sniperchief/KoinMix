@@ -21,7 +21,7 @@ description: >
 
 # `base_url` must point at the public deployment of this service. Override per
 # environment before registering on-chain.
-base_url: https://miner.koinmix.io
+base_url: https://koinmix-production.up.railway.app
 
 # This miner is the origin of the data, not a proxy for a keyed upstream, so no
 # credentials are injected by the node. Provider API keys are held privately by
