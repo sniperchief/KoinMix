@@ -907,7 +907,25 @@ called out as such rather than claimed.
 
 ## On-chain registration
 
-Not performed yet — recorded here so the YAML is registerable as it stands.
+**Registered on Base Sepolia** (chain `84532`), registration ID **42**.
+
+| | |
+| --- | --- |
+| Transaction | [`0x85a8b73a…f047dc`](https://sepolia.basescan.org/tx/0x85a8b73a4598e3006b947b229efad2cf699f245aa57e450b3a7028577bf047dc) |
+| Registry | `0x122396E8602BEed349434AA6E83123E7dD97F5A0` |
+| Descriptor | `https://koinmix-production.up.railway.app/telegraph/koinmix.yaml` |
+| `yamlHash` | `0x7a3cf8dd8be31ec00249b82128c5213a9df84ec9609c7c0450a6329fe45000b0` |
+| `minPriceUsdc` | `10000` ($0.01, the protocol floor) |
+| Intents | `["crypto_price"]` |
+
+Every field was decoded back out of the `MinerRegistered` event log and checked
+against the descriptor being served. The committed `yamlHash` is byte-identical
+to the live endpoint's, which is the whole point of the LF pinning in
+[.gitattributes](.gitattributes): registering the CRLF working copy's hash would
+have failed verification on every node while the miner looked perfectly healthy.
+
+Registration was performed by [scripts/register-miner.sh](scripts/register-miner.sh),
+which re-runs these checks and simulates the call before broadcasting.
 
 ```bash
 npm run yaml:hash    # → 0x<sha256 of the exact bytes served>
@@ -933,16 +951,16 @@ Notes drawn from the docs, each easy to get wrong:
 - Registrations activate at the next **epoch boundary** (`EPOCH_BLOCK_INTERVAL`,
   default 300 blocks), not immediately.
 
-### What is still required before registering
+### Registration prerequisites
 
-None of the following is invented here, because none of it can be: each needs a
-value only the operator or the Telegraph team can supply.
+All deployment values are now supplied; the one remaining unknown is a question
+for the Telegraph team rather than a value the operator can produce.
 
 | Requirement | Status | What it needs |
 | --- | --- | --- |
 | Public HTTPS origin | **ready** | Deployed at `https://koinmix-production.up.railway.app`, which serves the descriptor at `/telegraph/koinmix.yaml` and is the value of `base_url`. Verified live: health, prices for all four assets, and the YAML route. |
-| `MINER_FEE_ADDRESS` | **outstanding** | The EVM address that receives payouts. Unset — the config accepts it but no value is committed anywhere in this repo. |
-| `MINER_PRIVATE_KEY` / `RPC` | **outstanding** | Used only by the `cast send` above, at the operator's machine. Never read by the miner. |
+| `MINER_FEE_ADDRESS` | **ready** | Committed on-chain as `0x8348f644389a80e853047c3bced7bfb1b74c582a`. Not set in this repo — it is a registration value, never read by the miner at runtime. |
+| `MINER_PRIVATE_KEY` / `RPC` | **done** | Used once, from a Foundry keystore on the operator's machine. Never read by the miner and never stored in this repo. |
 | Registration hash | ready | `npm run yaml:hash`, recomputed after any YAML edit. |
 | Intent routing | **needs confirmation** | See below. |
 
