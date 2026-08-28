@@ -31,11 +31,10 @@ curl  https://koinmix-production.up.railway.app/healthz
 curl  https://koinmix-production.up.railway.app/telegraph/koinmix.yaml
 ```
 
-**Not registered on-chain.** No Telegraph node routes to this miner yet, so the
-terminal calls it directly and says so rather than drawing a node hop that is
-not happening. The remaining blockers are a payout address and a signed
-registration transaction — deployment values, not code. See
-[On-chain registration](#on-chain-registration).
+**Registered on Base Sepolia**, registration ID `252`, on the canonical
+`CRYPTO_PRICE` intent — see [On-chain registration](#on-chain-registration).
+The terminal still calls the miner directly rather than through a node, and says
+so on screen rather than drawing a hop that is not happening.
 
 ---
 
@@ -802,12 +801,16 @@ on 2026-08-25, and worth stating because two of these are easy to get wrong:
 is `weather_check` in the standard — so the casing is presentational. Input is
 accepted in either spelling.
 
-What remains genuinely open is **routing, not casing**: `crypto_price` is not
-among the canonical 27 intents in the core docs, and the registry docs warn that
-non-canonical intents are "accepted but will not be routed by the autonomous
-engine". The hackathon catalog lists CRYPTO_PRICE as a first-class Tier A intent,
-so the two sources disagree. Confirm with the Telegraph team before relying on
-autonomous routing.
+**Routing is resolved too** (2026-08-27). Earlier revisions of this section
+flagged it as the genuinely open question: `crypto_price` was absent from the
+27-entry canonical list in the core docs, and those docs warn that non-canonical
+intents are "accepted but will not be routed by the autonomous engine".
+
+That list was stale. The live
+[Miner YAML Registry](https://integrate.telegraphprotocol.com) carries
+`CRYPTO_PRICE` among its searchable canonical intents — *"Query names a
+cryptocurrency asset and asks for its current or historical price"* — and
+registration 252 was accepted against it. The intent routes.
 
 ### Diagnostics are not part of the response
 
@@ -907,25 +910,44 @@ called out as such rather than claimed.
 
 ## On-chain registration
 
-**Registered on Base Sepolia** (chain `84532`), registration ID **42**.
+**Registered on Base Sepolia** (chain `84532`), registration ID **252**, via the
+[Miner YAML Registry](https://integrate.telegraphprotocol.com).
+
+| | |
+| --- | --- |
+| Registration ID | **252** |
+| Transaction | `0x2d1447ac439b9d0a…d2fef322` |
+| Registry | `0x122396E8602BEed349434AA6E83123E7dD97F5A0` |
+| Descriptor | `ipfs://QmZ2xmBXaxAY8vFJWAXvG4TCJ3wnLcPqMos1o7ps8pyyXq` |
+| `yamlHash` | `0x4a74c1df8cdfb2d8a52f2e49f9815990a598aa92b7e5e46ef6a9855dd8b94039` |
+| `minPriceUsdc` | `10000` ($0.01, the protocol floor) |
+| Intent | `CRYPTO_PRICE` |
+
+The registry pins the descriptor to IPFS and registers the hash of the pinned
+bytes, so the IPFS copy — not the one this repository serves at
+`/telegraph/koinmix.yaml` — is what nodes read. The file here is kept in sync as
+documentation and remains the source the descriptor was built from.
+
+### An earlier manual registration
+
+Registration **42** was made first, directly against the registry contract with
+a self-hosted descriptor, before the portal was known to be the intake path:
 
 | | |
 | --- | --- |
 | Transaction | [`0x85a8b73a…f047dc`](https://sepolia.basescan.org/tx/0x85a8b73a4598e3006b947b229efad2cf699f245aa57e450b3a7028577bf047dc) |
-| Registry | `0x122396E8602BEed349434AA6E83123E7dD97F5A0` |
 | Descriptor | `https://koinmix-production.up.railway.app/telegraph/koinmix.yaml` |
 | `yamlHash` | `0x7a3cf8dd8be31ec00249b82128c5213a9df84ec9609c7c0450a6329fe45000b0` |
-| `minPriceUsdc` | `10000` ($0.01, the protocol floor) |
-| Intents | `["crypto_price"]` |
 
-Every field was decoded back out of the `MinerRegistered` event log and checked
-against the descriptor being served. The committed `yamlHash` is byte-identical
-to the live endpoint's, which is the whole point of the LF pinning in
-[.gitattributes](.gitattributes): registering the CRLF working copy's hash would
-have failed verification on every node while the miner looked perfectly healthy.
+It is superseded by 252 and retained here as history. Every field was decoded
+back out of the `MinerRegistered` event log and checked against the descriptor
+being served — the committed hash was byte-identical to the live endpoint's,
+which is what the LF pinning in [.gitattributes](.gitattributes) exists for.
+Registering the CRLF working copy's hash instead would have failed verification
+on every node while the miner looked perfectly healthy.
 
-Registration was performed by [scripts/register-miner.sh](scripts/register-miner.sh),
-which re-runs these checks and simulates the call before broadcasting.
+That registration used [scripts/register-miner.sh](scripts/register-miner.sh),
+which re-runs those checks and simulates the call before broadcasting.
 
 ```bash
 npm run yaml:hash    # → 0x<sha256 of the exact bytes served>
@@ -962,24 +984,21 @@ for the Telegraph team rather than a value the operator can produce.
 | `MINER_FEE_ADDRESS` | **ready** | Committed on-chain as `0x8348f644389a80e853047c3bced7bfb1b74c582a`. Not set in this repo — it is a registration value, never read by the miner at runtime. |
 | `MINER_PRIVATE_KEY` / `RPC` | **done** | Used once, from a Foundry keystore on the operator's machine. Never read by the miner and never stored in this repo. |
 | Registration hash | ready | `npm run yaml:hash`, recomputed after any YAML edit. |
-| Intent routing | **needs confirmation** | See below. |
+| Intent routing | **resolved** | `CRYPTO_PRICE` is canonical in the live registry; registration 252 was accepted against it. |
 
 The miner itself needs no credentials to run: all four providers work keyless,
 and `auth.type: none` in the YAML means the node injects nothing.
 
-### Two open questions for the Telegraph team
+### One open question for the Telegraph team
 
-1. **Intent routing.** Resolved: the *casing* is `crypto_price`, since the
-   hackathon catalog uppercases every intent including ones the standard lists
-   in lower snake_case. Still open: `crypto_price` is not among the canonical 27
-   intents, and the registry docs warn non-canonical intents are "accepted but
-   will not be routed by the autonomous engine", while the hackathon catalog
-   lists CRYPTO_PRICE as a first-class Tier A intent. The two sources disagree,
-   and only Telegraph can say which governs routing.
-2. **Signal type.** The canonical `signal_mapping.type` enum has no
-   financial/market-data member, and a value outside it fails node-side
-   validation. We use `task_completion` as the only member that is not
-   semantically wrong for a deterministic data lookup.
+**Signal type.** The canonical `signal_mapping.type` enum has no
+financial/market-data member, and a value outside it fails node-side validation.
+We use `task_completion` as the only member that is not semantically wrong for a
+deterministic data lookup. A market-data member would describe this miner
+better; whether one now exists is worth confirming.
+
+Intent routing, previously listed here, is resolved — see
+[Intent casing, resolved](#intent-casing-resolved).
 
 ---
 

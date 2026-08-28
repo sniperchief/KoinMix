@@ -21,11 +21,12 @@ import { Badge, Card, Unavailable, cx } from "./ui";
  * response. The OnChainData arrays shown are therefore computed the same way a
  * node computes them, from the same two artifacts.
  *
- * What this does NOT do is route through a Telegraph node, because KoinMix is
- * not registered yet — that needs a public HTTPS origin and a payout address.
+ * What this does NOT do is route through a Telegraph node. KoinMix is
+ * registered on Base Sepolia (registration 42), but this terminal calls the
+ * miner directly, so no node terminates payment or selects the miner here.
  * The panel says so rather than implying a hop that did not happen. Faking the
- * one link in the chain we cannot yet exercise would undermine the point of
- * showing the chain at all.
+ * one link in the chain we do not exercise would undermine the point of showing
+ * the chain at all.
  */
 
 interface Props {
@@ -303,7 +304,7 @@ export function TelegraphPanel({ asset, quote }: Props) {
                   {!item.live && (
                     <Badge
                       tone="warn"
-                      title="KoinMix is not registered on-chain yet, so no node is in the path"
+                      title="This terminal calls the miner directly, so no Telegraph node is in the path"
                     >
                       not yet live
                     </Badge>
@@ -318,7 +319,8 @@ export function TelegraphPanel({ asset, quote }: Props) {
 
       <p className="rounded border border-warn/30 bg-warn/5 px-3 py-2 text-xs leading-relaxed text-ink-muted">
         <span className="font-medium text-warn">One hop is simulated.</span>{" "}
-        KoinMix is not registered on-chain yet, so no Telegraph node sits in this
+        KoinMix is registered on Base Sepolia (registration 42), but this
+        terminal calls the miner directly, so no Telegraph node sits in this
         path. Everything else is real: the button issues the request a node
         would issue, to{" "}
         <code className="font-mono text-[11px] text-ink-muted">{MINER_URL}</code>

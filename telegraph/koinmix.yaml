@@ -9,8 +9,22 @@
 #   changes the hash and requires deregister + re-register.
 
 version: "1"
-kind: subnet
-id: 9001
+
+# `miner`, not `subnet`: the Miner YAML Registry
+# (https://integrate.telegraphprotocol.com) accepts only `miner` or `validator`.
+kind: miner
+
+# A registry-assigned id, not a self-chosen number — an arbitrary value here
+# disagrees with what the chain records.
+#
+# NOTE: this says 42 while the live registration is 252. The descriptor pinned
+# to IPFS and registered as 252 carries `id: 42`, because 42 was entered during
+# the portal flow (from an earlier manual registration) before the portal issued
+# 252 of its own. This file mirrors the pinned bytes rather than silently
+# disagreeing with them. Set this to 252 whenever the descriptor is next
+# re-uploaded and re-registered.
+id: 42
+
 slug: koinmix-crypto-price
 protocol: generic
 name: KoinMix Crypto Price Oracle
@@ -26,6 +40,12 @@ base_url: https://koinmix-production.up.railway.app
 # This miner is the origin of the data, not a proxy for a keyed upstream, so no
 # credentials are injected by the node. Provider API keys are held privately by
 # the miner process (see .env.example) and never appear here.
+docs:
+  website: https://koinmix-terminal.vercel.app
+  documentation: https://github.com/sniperchief/KoinMix#readme
+  repository: https://github.com/sniperchief/KoinMix
+  twitter: https://x.com/sniperchief_001
+
 auth:
   type: none
 
@@ -80,14 +100,18 @@ semantics:
     label_field: price
     reason_field: explanation
   supported_intents:
-    # Lower snake_case is the wire form. The hackathon catalog renders this
-    # intent as CRYPTO_PRICE, but it renders every intent that way — including
-    # WEATHER_CHECK, which the YAML Standard lists as `weather_check` — so the
-    # casing there is presentational. See src/telegraph/intents.ts.
+    # RESOLVED: CRYPTO_PRICE is a canonical intent. It appears in the registry's
+    # own searchable list at https://integrate.telegraphprotocol.com, defined as
+    # "Query names a cryptocurrency asset and asks for its current or historical
+    # price." Earlier revisions of this file recorded a worry that the intent was
+    # non-canonical and therefore might be "accepted but not routed by the
+    # autonomous engine"; that came from a stale docs page listing 27 intents,
+    # where the live registry now lists far more. It routes.
     #
-    # Still open: `crypto_price` is not among the canonical 27 intents, and the
-    # registry docs warn that non-canonical intents are "accepted but will not
-    # be routed by the autonomous engine". See README.md.
+    # Lower snake_case is the wire form per the YAML Standard; the registry
+    # renders every intent uppercase presentationally, and registration 252 was
+    # submitted as CRYPTO_PRICE. Both resolve to the same intent —
+    # src/telegraph/intents.ts accepts either casing on input.
     - crypto_price
 
 # ── On-chain bridge ──────────────────────────────────────────────────────────

@@ -20,10 +20,17 @@
  * is the standard's lower snake case. We declare `crypto_price`.
  *
  * Input remains case-insensitive (see `isSupportedIntent`) so the miner answers
- * whichever spelling a node actually dispatches. What stays genuinely open is
- * routing, not casing: the Miner Registry docs say intents outside the canonical
+ * whichever spelling a node actually dispatches.
+ *
+ * ROUTING, RESOLVED (verified 2026-08-27):
+ * An earlier revision of this comment recorded routing as the genuinely open
+ * question — the Miner Registry docs warned that intents outside the canonical
  * 27 are "accepted but will not be routed by the autonomous engine", and
- * `crypto_price` is not among those 27. See README.md.
+ * `crypto_price` was not among those 27. That 27-entry list was stale. The live
+ * registry at https://integrate.telegraphprotocol.com lists CRYPTO_PRICE among
+ * its canonical intents — "Query names a cryptocurrency asset and asks for its
+ * current or historical price" — and registration 252 was accepted against it.
+ * The intent routes.
  */
 
 /** The intent this miner serves, in YAML Standard (snake_case) form. */
